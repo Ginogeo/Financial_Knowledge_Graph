@@ -1,0 +1,44 @@
+# Local Environment Requirements
+# For Google Colab, use requirements-colab.txt instead
+
+# PDF Parsing Dependencies
+pdfminer.six>=20221105
+pdfplumber>=0.11.0
+unstructured>=0.10.0
+unstructured-inference>=0.7.0
+pdf2image>=1.16.0
+pypdf>=3.0.0
+pypdfium2>=4.0.0
+pillow>=10.0.0
+pi-heif>=0.10.0
+mistralai>=1.0.0
+
+# Computer Vision (required by unstructured)
+opencv-python>=4.8.0
+numpy>=1.24.0,<2.0
+
+# Unstructured dependencies
+layoutparser>=0.3.0
+lxml>=4.9.0
+emoji>=2.0.0
+langdetect>=1.0.9
+nltk>=3.8.0
+tabulate>=0.9.0
+beautifulsoup4>=4.11.0
+
+# Graph Database
+neo4j>=5.0.0
+
+# Vector Database & Embeddings
+chromadb>=0.4.0
+sentence-transformers>=2.2.0
+
+# LLM API Integration
+openai>=1.0.0
+
+# Web Interface
+streamlit>=1.28.0
+
+# Standard Libraries (usually pre-installed)
+# json, os, sys, re, collections are built-in
+
