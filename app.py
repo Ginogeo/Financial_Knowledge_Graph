@@ -69,8 +69,7 @@ with st.sidebar:
     
     **RAG Advantages:**
     - ✅ Retrieval: Find relevant chunks
-    - ✅ Graph: Discover connections  
-    - ✅ Efficient: ~95% token savings
+    - ✅ Graph: Discover connections      - ✅ Company Context: PREAMBLE always included    - ✅ Efficient: ~95% token savings
     - ✅ Accurate: Precise context
     
     **Document Stats:**
@@ -110,6 +109,7 @@ if search_button and query:
     with col1:
         st.markdown("### 📄 Full Document Dump")
         st.caption("Naive approach: Upload entire document (~597k chars)")
+        st.info(f"🤖 Model: **{selected_model}**")
         
         with st.spinner("⏳ Processing full document..."):
             full_doc_response = query_llm_full_document(
@@ -134,7 +134,8 @@ if search_button and query:
     # RIGHT COLUMN: Optimized RAG Pipeline
     with col2:
         st.markdown("### 🎯 Optimized RAG Pipeline")
-        st.caption("Smart retrieval: Vector Search + Knowledge Graph")
+        st.caption("Smart retrieval: Vector Search + Knowledge Graph + Company Context")
+        st.info(f"🤖 Model: **{selected_model}**")
         
         with st.spinner("⏳ Retrieving relevant context..."):
             rag_response = query_llm_with_rag(
@@ -147,7 +148,7 @@ if search_button and query:
         
         # Show efficiency metrics
         context_size = len(formatted_context)
-        st.success(f"✅ **Efficient**: Only {context_size:,} chars sent (~{context_size//4} tokens)")
+        st.success(f"✅ **Efficient**: Only {context_size:,} chars sent (~{context_size//4} tokens) + PREAMBLE")
         
         st.markdown(
             f"""<div style='background-color: #1a1a1a; padding: 20px; border-radius: 10px; border-left: 4px solid #44ff44;'>
@@ -156,7 +157,7 @@ if search_button and query:
             unsafe_allow_html=True
         )
         
-        st.success("🎯 This approach retrieves only relevant sections with graph connections")
+        st.success("🎯 This approach retrieves relevant sections + company context via knowledge graph")
     
     # Show retrieved context (collapsible)
     st.divider()
@@ -204,6 +205,9 @@ if search_button and query:
                 st.info("No cross-references detected for this section.")
         
         with tab3:
+            st.markdown("### Full Context Sent to LLM")
+            st.success("✅ **PREAMBLE always included** - Company information for proper grounding")
+            st.info(f"📊 Total context size: {len(formatted_context):,} characters (~{len(formatted_context)//4:,} tokens)")
             st.code(formatted_context, language="text")
         
         with tab4:
@@ -222,13 +226,15 @@ if search_button and query:
             2. **Cost Effective**: Sends only ~{:,} chars ({:.1f}% reduction)
             3. **Fast**: Pre-indexed vector + graph search
             4. **Precise**: Graph traversal finds cross-references
-            5. **Scalable**: Works with documents of any size
+            5. **Context-Aware**: PREAMBLE always included for grounding
+            6. **Scalable**: Works with documents of any size
             
             #### **Result:**
             - **{:.1f}x more efficient** in token usage
             - **Same or better accuracy** with precise context
             - **Sub-second retrieval** with vector search
             - **Graph-aware** connections between sections
+            - **Company context** always included via PREAMBLE
             """.format(rag_size, efficiency_gain, full_doc_size / max(rag_size, 1)))
 
 
@@ -256,6 +262,7 @@ else:
         **The Smart Approach:**
         - Vector search finds relevant chunks
         - Graph traversal discovers connections
+        - PREAMBLE (company info) always included
         - Only sends relevant context (~10-20k chars)
         - Fast retrieval (<1 second)
         - Precise and cost-effective

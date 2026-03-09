@@ -20,7 +20,7 @@ client = OpenAI(
 )
 
 # Default model - you can change this to any NVIDIA model
-DEFAULT_MODEL = "meta/llama-3.1-405b-instruct"  # or "nvidia/llama-3.1-nemotron-70b-instruct"
+DEFAULT_MODEL = "minimaxai/minimax-m2.5"
 
 
 def load_full_document(max_chars: int = 597681) -> str:
@@ -200,9 +200,36 @@ ANSWER (based on the context above):"""
         return f"❌ Error querying NVIDIA API: {str(e)}\n\nPlease check your API key in src/config.py"
 
 
+def load_preamble() -> str:
+    """
+    Load the PREAMBLE section containing company information.
+    This should always be included in context for proper grounding.
+    
+    Returns:
+        PREAMBLE text or empty string if not found
+    """
+    try:
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        json_path = os.path.join(base_dir, "data", "processed", "parsed_data1.json")
+        
+        with open(json_path, 'r', encoding='utf-8') as f:
+            sections = json.load(f)
+        
+        # Find the PREAMBLE section
+        for section in sections:
+            if section.get('id', '').upper() == 'PREAMBLE':
+                return section.get('text', '')
+        
+        return ""
+    except Exception as e:
+        print(f"Warning: Could not load PREAMBLE: {e}")
+        return ""
+
+
 def format_context_for_llm(primary_text: str, graph_context: list, matched_id: str) -> str:
     """
     Format the retrieved context (from hybrid search) into a clean string for the LLM.
+    Always includes PREAMBLE (company information) for proper grounding.
     
     Args:
         primary_text: The main text chunk from vector search
@@ -210,15 +237,29 @@ def format_context_for_llm(primary_text: str, graph_context: list, matched_id: s
         matched_id: ID of the matched section
     
     Returns:
-        Formatted context string
+        Formatted context string with PREAMBLE prepended
     """
+    # Load and add PREAMBLE (company context) first
+    preamble = load_preamble()
+    formatted = ""
+    
+    if preamble:
+        formatted = "DOCUMENT CONTEXT (Always included):\n"
+        formatted += "=" * 60 + "\n"
+        # Limit preamble to first 1000 chars if too long
+        preamble_preview = preamble[:1000] if len(preamble) > 1000 else preamble
+        if len(preamble) > 1000:
+            preamble_preview += "\n[... preamble continues ...]"
+        formatted += preamble_preview + "\n"
+        formatted += "=" * 60 + "\n\n"
+    
     # Clean up HTML tags from primary_text
     import re
     clean_primary = re.sub(r'<[^>]+>', '', primary_text)
     clean_primary = re.sub(r'\*\*Match \d+.*?\*\*', '', clean_primary)
     clean_primary = clean_primary.replace('<hr>', '\n---\n').strip()
     
-    formatted = f"PRIMARY SECTION ({matched_id}):\n{clean_primary}\n\n"
+    formatted += f"PRIMARY SECTION ({matched_id}):\n{clean_primary}\n\n"
     
     # Add related sections from graph
     if graph_context:
@@ -239,12 +280,14 @@ def get_available_models():
     You can update this list based on NVIDIA's catalog.
     """
     return [
+        "meta/llama-3.1-8b-instruct",
         "meta/llama-3.1-405b-instruct",
         "meta/llama-3.1-70b-instruct",
-        "meta/llama-3.1-8b-instruct",
         "nvidia/llama-3.1-nemotron-70b-instruct",
         "mistralai/mistral-large-2-instruct",
         "mistralai/mixtral-8x7b-instruct-v0.1",
+        "moonshotai/kimi-k2.5",
+        "minimaxai/minimax-m2.5"
     ]
 
 
