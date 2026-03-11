@@ -6,6 +6,7 @@ Supports comparison between direct LLM queries and RAG-enhanced queries.
 import os
 import sys
 import json
+from pypdf import PdfReader
 from openai import OpenAI
 
 # Add src directory to Python path to find config module
@@ -25,7 +26,7 @@ DEFAULT_MODEL = "minimaxai/minimax-m2.5"
 
 def load_full_document(max_chars: int = 597681) -> str:
     """
-    Load the entire parsed document as one big text blob.
+    Load the entire raw PDF document as one big text blob.
     This represents the naive approach: dumping everything into the LLM context.
     
     Full document stats:
@@ -40,19 +41,26 @@ def load_full_document(max_chars: int = 597681) -> str:
         Full document text concatenated together
     """
     try:
-        # Get the path to parsed_data1.json
+        # Prefer the primary raw filing; fall back to the first PDF in data/raw.
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        json_path = os.path.join(base_dir, "data", "processed", "parsed_data1.json")
-        
-        with open(json_path, 'r', encoding='utf-8') as f:
-            sections = json.load(f)
-        
-        # Concatenate all sections
+        raw_dir = os.path.join(base_dir, "data", "raw")
+        preferred_pdf = os.path.join(raw_dir, "SEC 10-K Filing.pdf")
+
+        if os.path.exists(preferred_pdf):
+            pdf_path = preferred_pdf
+        else:
+            pdf_files = [f for f in os.listdir(raw_dir) if f.lower().endswith(".pdf")]
+            if not pdf_files:
+                return "Error loading document: No PDF file found in data/raw"
+            pdf_path = os.path.join(raw_dir, pdf_files[0])
+
+        reader = PdfReader(pdf_path)
+
+        # Concatenate all pages
         full_text = ""
-        for section in sections:
-            section_id = section.get('id', 'UNKNOWN')
-            section_text = section.get('text', '')
-            full_text += f"\n\n{'='*60}\n{section_id}\n{'='*60}\n{section_text}"
+        for page_number, page in enumerate(reader.pages, start=1):
+            page_text = page.extract_text() or ""
+            full_text += f"\n\n{'='*60}\nPAGE {page_number}\n{'='*60}\n{page_text}"
         
         # Truncate if too long (to avoid exceeding model context limits)
         if len(full_text) > max_chars:
@@ -114,42 +122,6 @@ ANSWER:"""
         return f"❌ Error querying NVIDIA API: {str(e)}\n\nPlease check your API key in src/config.py"
 
 
-def query_llm_direct(question: str, model: str = DEFAULT_MODEL, temperature: float = 0.2, max_tokens: int = 1024) -> str:
-    """
-    Query the LLM directly WITHOUT any context (no RAG).
-    This shows what the model knows from its training data alone.
-    
-    Args:
-        question: The user's question
-        model: NVIDIA model to use
-        temperature: Controls randomness (0.0 = deterministic, 1.0 = creative)
-        max_tokens: Maximum response length
-    
-    Returns:
-        The LLM's response as a string
-    """
-    try:
-        completion = client.chat.completions.create(
-            model=model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a helpful financial analyst assistant. Answer questions based on your general knowledge. If you don't know specific details about a company, be honest about it."
-                },
-                {
-                    "role": "user",
-                    "content": question
-                }
-            ],
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-        
-        return completion.choices[0].message.content
-    
-    except Exception as e:
-        return f"❌ Error querying NVIDIA API: {str(e)}\n\nPlease check your API key in src/config.py"
-
 
 def query_llm_with_rag(question: str, context: str, model: str = DEFAULT_MODEL, temperature: float = 0.2, max_tokens: int = 1024) -> str:
     """
@@ -170,13 +142,13 @@ def query_llm_with_rag(question: str, context: str, model: str = DEFAULT_MODEL, 
         # Construct a prompt that includes the retrieved context
         rag_prompt = f"""You are a financial analyst assistant. Answer the question based ONLY on the context provided below. If the context doesn't contain enough information to answer the question, say so.
 
-CONTEXT FROM FINANCIAL DOCUMENTS:
-{context}
+                        CONTEXT FROM FINANCIAL DOCUMENTS:
+                        {context}
 
-QUESTION:
-{question}
+                        QUESTION:
+                        {question}
 
-ANSWER (based on the context above):"""
+                        ANSWER (based on the context above):"""
 
         completion = client.chat.completions.create(
             model=model,

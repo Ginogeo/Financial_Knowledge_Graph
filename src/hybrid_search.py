@@ -3,6 +3,7 @@ import sys
 import chromadb
 from chromadb.utils import embedding_functions
 from neo4j import GraphDatabase
+from neo4j.exceptions import Neo4jError, SessionExpired, ServiceUnavailable
 
 # Add src directory to Python path to find config module
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -61,31 +62,35 @@ def hybrid_search(query):
     
     graph_context = []
     
-    # 2. Graph Traversal (The Map) - THIS STAYS EXACTLY THE SAME
-    with neo4j_driver.session() as session:
-        result = session.run("""
-            MATCH (s:Section {id: $id})-[:REFERS_TO]->(target:Section)
-            RETURN target.id AS ref_id
-        """, id=matched_neo4j_id)
-        
-        for record in result:
-            ref_id = record["ref_id"]
-            # Try both the original ID and normalized versions
-            normalized_ref_id = normalize_id(ref_id)
-            
-            # Try original ID first
-            ref_docs = collection.get(where={"neo4j_id": ref_id}, limit=1000)
-            
-            # If not found, try normalized ID
-            if not ref_docs['documents']:
-                ref_docs = collection.get(where={"neo4j_id": normalized_ref_id}, limit=1000)
-            
-            if ref_docs['documents']:
-                # Combine ALL chunks from this section for complete context
-                full_text = "\n\n".join(ref_docs['documents'])  # Get all chunks - complete section content
-                graph_context.append({"id": ref_id, "text": full_text})
-            else:
-                graph_context.append({"id": ref_id, "text": "[Graph traversed successfully, but exact text chunk not embedded.]"})
+    # 2. Graph Traversal (The Map)
+    try:
+        with neo4j_driver.session() as session:
+            result = session.run("""
+                MATCH (s:Section {id: $id})-[:REFERS_TO]->(target:Section)
+                RETURN target.id AS ref_id
+            """, id=matched_neo4j_id)
+
+            for record in result:
+                ref_id = record["ref_id"]
+                # Try both the original ID and normalized versions
+                normalized_ref_id = normalize_id(ref_id)
+
+                # Try original ID first
+                ref_docs = collection.get(where={"neo4j_id": ref_id}, limit=1000)
+
+                # If not found, try normalized ID
+                if not ref_docs['documents']:
+                    ref_docs = collection.get(where={"neo4j_id": normalized_ref_id}, limit=1000)
+
+                if ref_docs['documents']:
+                    # Combine ALL chunks from this section for complete context
+                    full_text = "\n\n".join(ref_docs['documents'])  # Get all chunks - complete section content
+                    graph_context.append({"id": ref_id, "text": full_text})
+                else:
+                    graph_context.append({"id": ref_id, "text": "[Graph traversed successfully, but exact text chunk not embedded.]"})
+    except (SessionExpired, ServiceUnavailable, Neo4jError) as e:
+        # Keep RAG working with vector context even if Aura is temporarily unavailable.
+        print(f"⚠️ Neo4j unavailable, continuing with vector-only context: {e}")
                 
     return primary_text, matched_neo4j_id, graph_context
 

@@ -1,6 +1,7 @@
 import streamlit as st
 import sys
 import os
+import re
 
 # Bulletproof pathing so Streamlit can find your src folder
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -16,6 +17,40 @@ from src.nvidia_llm import (
 
 # Page configuration
 st.set_page_config(layout="wide", page_title="Financial RAG Comparison")
+
+# Keep model-generated tables aligned inside response cards.
+st.markdown(
+    """
+    <style>
+    .llm-response {
+        background-color: #1a1a1a;
+        padding: 20px;
+        border-radius: 10px;
+        overflow-x: auto;
+    }
+
+    .llm-response.full {
+        border-left: 4px solid #ff8800;
+    }
+
+    .llm-response.rag {
+        border-left: 4px solid #44ff44;
+    }
+
+    .llm-response table {
+        border-collapse: collapse;
+        width: max-content;
+        min-width: 100%;
+    }
+
+    .llm-response th,
+    .llm-response td {
+        vertical-align: top;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
 # Title and description
 st.title("🔬 Financial Document RAG Comparison")
@@ -123,7 +158,7 @@ if search_button and query:
         st.warning("⚠️ **Issues**: High token cost (~149k tokens), slow processing, entire 597k chars in context")
         
         st.markdown(
-            f"""<div style='background-color: #1a1a1a; padding: 20px; border-radius: 10px; border-left: 4px solid #ff8800;'>
+            f"""<div class='llm-response full'>
             {full_doc_response}
             </div>""",
             unsafe_allow_html=True
@@ -151,7 +186,7 @@ if search_button and query:
         st.success(f"✅ **Efficient**: Only {context_size:,} chars sent (~{context_size//4} tokens) + PREAMBLE")
         
         st.markdown(
-            f"""<div style='background-color: #1a1a1a; padding: 20px; border-radius: 10px; border-left: 4px solid #44ff44;'>
+            f"""<div class='llm-response rag'>
             {rag_response}
             </div>""",
             unsafe_allow_html=True
@@ -185,7 +220,21 @@ if search_button and query:
         
         with tab1:
             st.subheader(f"Vector Match: {matched_id}")
-            st.markdown(primary_text, unsafe_allow_html=True)
+            # Render as cleaned plain text so broken HTML/table fragments from chunks
+            # cannot distort layout inside the tab.
+            primary_display = primary_text.replace("<hr>", "\n" + "-" * 60 + "\n")
+            primary_display = primary_display.replace("<br>", "\n")
+            primary_display = re.sub(r"<[^>]+>", " ", primary_display)
+            primary_display = re.sub(r"[ \t]+", " ", primary_display)
+            primary_display = re.sub(r"\n{3,}", "\n\n", primary_display).strip()
+
+            st.text_area(
+                "Primary Match Content",
+                primary_display,
+                height=420,
+                key="primary_match_content",
+                label_visibility="collapsed"
+            )
         
         with tab2:
             if graph_context:
