@@ -1,0 +1,223 @@
+Title: A Hybrid Retrieval-Augmented Framework for Financial Document Question Answering Using Semantic Search and Knowledge Graph Traversal
+
+Author: Project Draft
+Date: March 2026
+
+Abstract
+This work presents an end-to-end, production-oriented retrieval-augmented generation (RAG) framework for question answering over long-form financial documents. The system integrates PDF parsing, section-aware semantic chunking, dense vector retrieval, and knowledge graph traversal to construct compact, evidence-grounded prompts for large language model (LLM) inference. A comparative user interface demonstrates two modes: (i) naive full-document prompting and (ii) hybrid RAG prompting. The latest architecture supports document-scoped ingestion and querying, allowing multiple uploaded PDFs to coexist without cross-document context leakage. The framework is designed for practical robustness, including graph-outage fallback to vector-only retrieval, environment-based secret management, and explicit document lifecycle tracking.
+
+Keywords
+RAG, financial NLP, semantic retrieval, knowledge graph, section linking, document QA, Neo4j, ChromaDB, LLM grounding
+
+1. Introduction
+Financial disclosures such as annual reports, 10-K filings, and management discussion sections contain high-value information for analysts, but their length and structure make direct LLM usage inefficient. Prompting an LLM with entire documents can introduce three operational failures: context overflow, high inference cost, and relevance dilution. These issues are amplified in documents with mixed narrative prose, tables, footnotes, and cross-references.
+
+The proposed framework addresses this by decomposing question answering into two phases:
+1. Retrieval and evidence construction
+2. Generative response synthesis
+
+The guiding principle is that high-quality answers require both semantic relevance and structural context. Dense retrieval identifies semantically similar passages, while graph traversal recovers related sections connected via explicit references (for example, "see Note X"). This hybridization improves contextual completeness without sending the entire document.
+
+2. Research Objective and Scope
+The primary objective is to answer user questions over uploaded financial PDFs with better grounding-efficiency trade-offs than full-document prompting.
+
+Specific goals:
+- Minimize tokens sent to the LLM per query.
+- Preserve answer fidelity by providing source-linked evidence.
+- Prevent cross-document contamination in multi-document settings.
+- Maintain graceful degradation under partial infrastructure failures.
+
+Scope of current implementation:
+- PDF-only ingestion.
+- Section-level parsing with extracted references.
+- Dense retrieval + single-seed graph expansion.
+- Side-by-side comparison UI for naive vs hybrid RAG.
+
+Out of scope (current version):
+- Full benchmarked evaluation against public QA datasets.
+- Multi-tenant authentication and authorization.
+- Async distributed job orchestration for large-scale ingestion.
+
+3. System Overview
+The pipeline consists of six major subsystems:
+
+3.1 User Interface and Orchestration
+The Streamlit application coordinates upload, indexing, retrieval, and inference. It also displays retrieval traces and context-size diagnostics. The UI includes:
+- PDF upload
+- Document processing trigger
+- Active document selector
+- Query input and comparative output panels
+
+3.2 Document Registry
+A registry tracks per-document status and paths. The lifecycle states are:
+- PROCESSING
+- READY
+- ERROR
+
+Registry entries include metadata such as document_id, filename, timestamps, and computed statistics (section count, chunk count, character count). This enables deterministic querying against the selected document.
+
+3.3 Parsing and Structuring
+Uploaded PDFs are parsed into section-structured JSON. The parser identifies section boundaries and extracts references where available. Table-aware extraction is supported in the current pipeline. Output is normalized into section objects containing text, references, and metadata used downstream.
+
+3.4 Vector Indexing
+Each processed section is cleaned and chunked before embedding. Chunking is overlap-aware to reduce boundary information loss. Chunks are embedded using sentence-transformers and inserted into ChromaDB collections namespaced per document:
+financial_docs__{document_id}
+
+3.5 Graph Construction
+Section nodes and REFERS_TO edges are written to Neo4j, scoped by document_id. This allows traversal to stay inside the selected document, preventing structural contamination across uploads.
+
+3.6 LLM Response Generation
+Two generation paths are supported:
+- Baseline: full-document prompt.
+- Hybrid RAG: context generated from semantic retrieval and graph expansion.
+
+4. Detailed Methodology
+4.1 Document Ingestion and Namespace Isolation
+For every uploaded file, the system generates a unique document_id and creates scoped storage locations:
+- data/raw/{document_id}/
+- data/processed/{document_id}/
+
+This namespace strategy is propagated across all layers (file storage, vector collection, graph nodes, and context loading), ensuring query isolation.
+
+4.2 Text Cleaning and Semantic Chunking
+Each section text is preprocessed to remove recurring artifacts such as bare page numbers and repetitive headings. The chunking algorithm is paragraph-sensitive and uses two controls:
+- CHUNK_SIZE = 1000 characters
+- CHUNK_OVERLAP = 200 characters
+
+Chunks are prefixed with section identifiers to preserve structural context in embeddings.
+
+4.3 Dense Retrieval
+Given a query q, the system performs top-k similarity retrieval (k = 10) against the active document collection. Returned chunks are grouped by section id to create a consolidated primary context.
+
+4.4 Graph Expansion
+The top semantic section acts as a seed node. Neo4j traversal follows REFERS_TO edges and retrieves linked sections within the same document namespace. Linked section text is added as secondary context.
+
+4.5 Context Packaging
+The final context packet includes:
+- Optional PREAMBLE (if found)
+- Primary retrieved section content
+- Graph-related supporting sections
+
+To control prompt growth, linked sections are preview-truncated before inclusion.
+
+4.6 Generation and Robustness
+The packaged context is inserted into the RAG prompt and sent to the NVIDIA OpenAI-compatible endpoint. If Neo4j traversal fails (for example, transient session expiration), the pipeline falls back to vector-only context and still returns an answer.
+
+5. Retrieval Algorithm (Operational Form)
+Input:
+- Query q
+- Active document_id d
+
+Algorithm:
+1) collection <- get_collection(financial_docs__d)
+2) V <- top_k_dense(q, k=10)
+3) Group V by neo4j_id to form primary context P
+4) seed <- highest-ranked neo4j_id in V
+5) G <- graph_neighbors(seed, document_id=d)
+6) For each g in G, fetch all matching chunks in collection with (neo4j_id=g and doc_id=d)
+7) Build context C = preamble(d) + P + graph_context
+8) Return LLM_answer(q, C)
+
+Failure handling:
+- If graph query fails, set graph_context = empty and proceed with C = preamble + P.
+
+6. Implementation Mapping
+6.1 Core modules
+- app.py: UI, upload flow, process orchestration, comparative inference.
+- src/parser.py: extraction and section construction.
+- src/build_vector.py: chunking + embedding + collection writes.
+- src/build_graph.py: Neo4j section graph construction.
+- src/hybrid_search.py: dense retrieval + graph expansion.
+- src/nvidia_llm.py: full-doc and RAG LLM calls + context formatting.
+- src/document_store.py: registry and per-document path management.
+
+6.2 Configuration and Security
+Configuration is environment-variable based, and .env loading is supported through python-dotenv. Example keys are documented in .env.example. This change reduces secret exposure risk from source control.
+
+7. Comparative Prompting Strategy
+The UI intentionally preserves a baseline mode to expose practical differences:
+
+Baseline mode characteristics:
+- Very large prompt payloads
+- Higher cost and latency
+- Potentially noisier evidence alignment
+
+Hybrid RAG mode characteristics:
+- Smaller targeted prompt payloads
+- Better section-level grounding
+- Structural recall via graph links
+
+This paired setup provides an educational and operational view of why retrieval architecture matters.
+
+8. Evaluation Framework (Proposed)
+A rigorous evaluation plan should include four metric families:
+
+8.1 Retrieval quality
+- Recall@k over section-level gold references
+- MRR for primary evidence section
+
+8.2 Generation quality
+- Faithfulness (claims supported by retrieved context)
+- Answer relevance to question intent
+
+8.3 Efficiency
+- Context size (chars/tokens) per query
+- End-to-end latency decomposition: parse, retrieve, generate
+
+8.4 Reliability
+- Query success rate under simulated graph failures
+- Consistency across repeated runs with fixed parameters
+
+Evaluation protocol recommendation:
+- Build a curated question set from uploaded documents.
+- Label expected supporting sections manually for a subset.
+- Compare baseline vs hybrid RAG on all metric families.
+
+9. Strengths of the Current System
+- Complete end-to-end prototype with practical tooling.
+- Explicitly inspectable retrieval traces.
+- Document-level namespace isolation in vector and graph layers.
+- Operational fallback path when graph backend is unavailable.
+- Configurable and deploy-aware secret handling.
+
+10. Limitations and Risks
+10.1 Parsing constraints
+Extraction quality varies by PDF format, table complexity, and OCR quality.
+
+10.2 Retrieval constraints
+Graph expansion currently uses one semantic seed; multi-seed expansion could improve recall for broad questions.
+
+10.3 Infrastructure constraints
+Inline processing in request flow can create blocking behavior for larger uploads.
+
+10.4 Storage constraints
+Local filesystem persistence is insufficient for robust cloud scaling unless replaced by external storage.
+
+11. Productionization Roadmap
+Short-term:
+- Move upload processing to background jobs.
+- Add explicit retry/backoff wrappers for external services.
+- Replace local registry with managed metadata store.
+
+Mid-term:
+- Add authentication and per-user ownership controls.
+- Externalize raw/processed artifact storage to object storage.
+- Add structured observability (logs, traces, failure dashboards).
+
+Long-term:
+- Hybrid rank fusion (dense + sparse + RRF).
+- Learned reranking.
+- Adaptive context budgeting by query type and model context window.
+
+12. Ethical and Practical Considerations
+Financial QA systems can induce over-trust if confidence and evidence are not explicit. The current design partially mitigates this by exposing retrieved context and linked sections. For higher assurance, future versions should add explicit citation spans and uncertainty indicators.
+
+13. Conclusion
+This project demonstrates that a hybrid retrieval architecture can materially improve practical LLM-based financial question answering. By combining section-aware semantic search with graph-based structural expansion, the system reduces prompt bloat while preserving relevant context. The addition of document-scoped indexing and query isolation is a significant architectural step toward safe multi-document operation. With asynchronous ingestion, externalized persistence, and user-scoped security, the framework can evolve into a robust production-grade analytical assistant.
+
+References (Project Components)
+- Streamlit for interactive interface and orchestration.
+- ChromaDB for dense retrieval over embedded chunks.
+- Neo4j for section graph representation and traversal.
+- sentence-transformers (all-MiniLM-L6-v2) for embeddings.
+- NVIDIA OpenAI-compatible API for response generation.

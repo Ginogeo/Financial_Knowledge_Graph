@@ -35,6 +35,7 @@ sentence-transformers>=2.2.0
 
 # LLM API Integration
 openai>=1.0.0
+python-dotenv>=1.0.0
 
 # Web Interface
 streamlit>=1.28.0

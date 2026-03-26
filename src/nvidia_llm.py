@@ -6,6 +6,7 @@ Supports comparison between direct LLM queries and RAG-enhanced queries.
 import os
 import sys
 import json
+from typing import Optional, Tuple
 from pypdf import PdfReader
 from openai import OpenAI
 
@@ -13,18 +14,35 @@ from openai import OpenAI
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import NVIDIA_API_KEY
 
-# NVIDIA API Configuration
-# NVIDIA uses OpenAI-compatible API format
-client = OpenAI(
-    base_url="https://integrate.api.nvidia.com/v1",
-    api_key=NVIDIA_API_KEY
-)
+
+def _get_nvidia_client() -> OpenAI:
+    if not NVIDIA_API_KEY:
+        raise ValueError(
+            "NVIDIA_API_KEY is not set. Add it to your environment or .env file."
+        )
+
+    # NVIDIA uses OpenAI-compatible API format.
+    return OpenAI(
+        base_url="https://integrate.api.nvidia.com/v1",
+        api_key=NVIDIA_API_KEY,
+    )
 
 # Default model - you can change this to any NVIDIA model
 DEFAULT_MODEL = "minimaxai/minimax-m2.5"
 
 
-def load_full_document(max_chars: int = 597681) -> str:
+def _get_document_dirs(document_id: Optional[str] = None) -> Tuple[str, str]:
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if document_id:
+        raw_dir = os.path.join(base_dir, "data", "raw", document_id)
+        processed_dir = os.path.join(base_dir, "data", "processed", document_id)
+    else:
+        raw_dir = os.path.join(base_dir, "data", "raw")
+        processed_dir = os.path.join(base_dir, "data", "processed")
+    return raw_dir, processed_dir
+
+
+def load_full_document(max_chars: int = 597681, document_id: Optional[str] = None) -> str:
     """
     Load the entire raw PDF document as one big text blob.
     This represents the naive approach: dumping everything into the LLM context.
@@ -41,9 +59,10 @@ def load_full_document(max_chars: int = 597681) -> str:
         Full document text concatenated together
     """
     try:
-        # Prefer the primary raw filing; fall back to the first PDF in data/raw.
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        raw_dir = os.path.join(base_dir, "data", "raw")
+        raw_dir, _ = _get_document_dirs(document_id)
+        if not os.path.exists(raw_dir):
+            return f"Error loading document: Raw directory not found for document_id={document_id}"
+
         preferred_pdf = os.path.join(raw_dir, "SEC 10-K Filing.pdf")
 
         if os.path.exists(preferred_pdf):
@@ -51,7 +70,7 @@ def load_full_document(max_chars: int = 597681) -> str:
         else:
             pdf_files = [f for f in os.listdir(raw_dir) if f.lower().endswith(".pdf")]
             if not pdf_files:
-                return "Error loading document: No PDF file found in data/raw"
+                return "Error loading document: No PDF file found in raw directory"
             pdf_path = os.path.join(raw_dir, pdf_files[0])
 
         reader = PdfReader(pdf_path)
@@ -72,7 +91,7 @@ def load_full_document(max_chars: int = 597681) -> str:
         return f"Error loading document: {str(e)}"
 
 
-def query_llm_full_document(question: str, model: str = DEFAULT_MODEL, temperature: float = 0.2, max_tokens: int = 1024) -> str:
+def query_llm_full_document(question: str, model: str = DEFAULT_MODEL, temperature: float = 0.2, max_tokens: int = 1024, document_id: Optional[str] = None) -> str:
     """
     Query the LLM with the ENTIRE document dumped into context.
     This represents the naive approach without retrieval optimization.
@@ -88,7 +107,7 @@ def query_llm_full_document(question: str, model: str = DEFAULT_MODEL, temperatu
     """
     try:
         # Load the entire document
-        full_doc = load_full_document(max_chars=597681)  # Full doc: ~149k tokens (597,681 chars, 111,118 words)
+        full_doc = load_full_document(max_chars=597681, document_id=document_id)
         
         prompt = f"""You are a financial analyst assistant. Answer the question based on the financial document provided below.
 
@@ -100,7 +119,7 @@ QUESTION:
 
 ANSWER:"""
 
-        completion = client.chat.completions.create(
+        completion = _get_nvidia_client().chat.completions.create(
             model=model,
             messages=[
                 {
@@ -150,7 +169,7 @@ def query_llm_with_rag(question: str, context: str, model: str = DEFAULT_MODEL, 
 
                         ANSWER (based on the context above):"""
 
-        completion = client.chat.completions.create(
+        completion = _get_nvidia_client().chat.completions.create(
             model=model,
             messages=[
                 {
@@ -172,7 +191,7 @@ def query_llm_with_rag(question: str, context: str, model: str = DEFAULT_MODEL, 
         return f"❌ Error querying NVIDIA API: {str(e)}\n\nPlease check your API key in src/config.py"
 
 
-def load_preamble() -> str:
+def load_preamble(document_id: Optional[str] = None) -> str:
     """
     Load the PREAMBLE section containing company information.
     This should always be included in context for proper grounding.
@@ -181,8 +200,14 @@ def load_preamble() -> str:
         PREAMBLE text or empty string if not found
     """
     try:
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        json_path = os.path.join(base_dir, "data", "processed", "parsed_data1.json")
+        _, processed_dir = _get_document_dirs(document_id)
+        if document_id:
+            json_path = os.path.join(processed_dir, "parsed_sections.json")
+        else:
+            json_path = os.path.join(processed_dir, "parsed_data1.json")
+
+        if not os.path.exists(json_path):
+            return ""
         
         with open(json_path, 'r', encoding='utf-8') as f:
             sections = json.load(f)
@@ -198,7 +223,7 @@ def load_preamble() -> str:
         return ""
 
 
-def format_context_for_llm(primary_text: str, graph_context: list, matched_id: str) -> str:
+def format_context_for_llm(primary_text: str, graph_context: list, matched_id: str, document_id: Optional[str] = None) -> str:
     """
     Format the retrieved context (from hybrid search) into a clean string for the LLM.
     Always includes PREAMBLE (company information) for proper grounding.
@@ -212,7 +237,7 @@ def format_context_for_llm(primary_text: str, graph_context: list, matched_id: s
         Formatted context string with PREAMBLE prepended
     """
     # Load and add PREAMBLE (company context) first
-    preamble = load_preamble()
+    preamble = load_preamble(document_id=document_id)
     formatted = ""
     
     if preamble:

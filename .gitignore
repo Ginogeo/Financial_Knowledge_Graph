@@ -7,7 +7,7 @@ __pycache__/
 venv/
 env/
 ENV/
-
+data/
 # IDEs
 .vscode/
 .idea/
@@ -16,6 +16,7 @@ ENV/
 
 # Config files with sensitive data
 src/config.py
+.env
 
 # Databases
 chroma_db/

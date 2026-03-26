@@ -1,5 +1,6 @@
 import os
 import sys
+from typing import Optional
 import chromadb
 from chromadb.utils import embedding_functions
 from neo4j import GraphDatabase
@@ -21,6 +22,10 @@ URI = NEO4J_URI
 AUTH = (NEO4J_USER, NEO4J_PASSWORD)
 neo4j_driver = GraphDatabase.driver(URI, auth=AUTH)
 
+
+def _collection_name(document_id: Optional[str]) -> str:
+    return f"financial_docs__{document_id}" if document_id else "financial_docs"
+
 def normalize_id(section_id):
     """Normalize section IDs to match between Neo4j and ChromaDB"""
     # Convert to uppercase and add colon if it's a NOTE
@@ -29,10 +34,13 @@ def normalize_id(section_id):
         normalized = normalized + ":"
     return normalized
 
-def hybrid_search(query):
+def hybrid_search(query, document_id: Optional[str] = None):
     # Get collection fresh each time to handle recreation
     try:
-        collection = chroma_client.get_collection(name="financial_docs", embedding_function=ef)
+        collection = chroma_client.get_collection(
+            name=_collection_name(document_id),
+            embedding_function=ef,
+        )
     except Exception as e:
         return f"Vector database not initialized. Please run build_vector.py first. Error: {str(e)}", "None", []
     
@@ -65,10 +73,23 @@ def hybrid_search(query):
     # 2. Graph Traversal (The Map)
     try:
         with neo4j_driver.session() as session:
-            result = session.run("""
-                MATCH (s:Section {id: $id})-[:REFERS_TO]->(target:Section)
-                RETURN target.id AS ref_id
-            """, id=matched_neo4j_id)
+            if document_id:
+                result = session.run(
+                    """
+                    MATCH (s:Section {id: $id, document_id: $doc_id})-[:REFERS_TO]->(target:Section {document_id: $doc_id})
+                    RETURN target.id AS ref_id
+                    """,
+                    id=matched_neo4j_id,
+                    doc_id=document_id,
+                )
+            else:
+                result = session.run(
+                    """
+                    MATCH (s:Section {id: $id})-[:REFERS_TO]->(target:Section)
+                    RETURN target.id AS ref_id
+                    """,
+                    id=matched_neo4j_id,
+                )
 
             for record in result:
                 ref_id = record["ref_id"]
@@ -76,11 +97,33 @@ def hybrid_search(query):
                 normalized_ref_id = normalize_id(ref_id)
 
                 # Try original ID first
-                ref_docs = collection.get(where={"neo4j_id": ref_id}, limit=1000)
+                if document_id:
+                    ref_docs = collection.get(
+                        where={
+                            "$and": [
+                                {"neo4j_id": ref_id},
+                                {"doc_id": document_id},
+                            ]
+                        },
+                        limit=1000,
+                    )
+                else:
+                    ref_docs = collection.get(where={"neo4j_id": ref_id}, limit=1000)
 
                 # If not found, try normalized ID
                 if not ref_docs['documents']:
-                    ref_docs = collection.get(where={"neo4j_id": normalized_ref_id}, limit=1000)
+                    if document_id:
+                        ref_docs = collection.get(
+                            where={
+                                "$and": [
+                                    {"neo4j_id": normalized_ref_id},
+                                    {"doc_id": document_id},
+                                ]
+                            },
+                            limit=1000,
+                        )
+                    else:
+                        ref_docs = collection.get(where={"neo4j_id": normalized_ref_id}, limit=1000)
 
                 if ref_docs['documents']:
                     # Combine ALL chunks from this section for complete context

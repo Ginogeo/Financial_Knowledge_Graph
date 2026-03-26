@@ -2,6 +2,7 @@ import os
 import sys
 import re
 import json
+from typing import Optional
 import chromadb
 from chromadb.utils import embedding_functions
 
@@ -83,7 +84,11 @@ def semantic_chunk(text: str, section_id: str) -> list[str]:
     return labeled
 
 
-def build_vector_db(data_path):
+def _collection_name(document_id: Optional[str]) -> str:
+    return f"financial_docs__{document_id}" if document_id else "financial_docs"
+
+
+def build_vector_db(data_path, document_id: Optional[str] = None):
     print(f"Loading parsed data from: {data_path}")
     with open(data_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
@@ -92,14 +97,16 @@ def build_vector_db(data_path):
     client = chromadb.PersistentClient(path=db_path)
     sentence_transformer_ef = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=EMBEDDING_MODEL)
     
+    collection_name = _collection_name(document_id)
+
     try:
-        client.delete_collection(name="financial_docs")
-        print("Cleared old vector collection.")
+        client.delete_collection(name=collection_name)
+        print(f"Cleared old vector collection: {collection_name}")
     except Exception:
-        pass 
+        pass
         
     collection = client.create_collection(
-        name="financial_docs", 
+        name=collection_name,
         embedding_function=sentence_transformer_ef
     )
     
@@ -122,7 +129,10 @@ def build_vector_db(data_path):
 
         for chunk_index, chunk in enumerate(chunks):
             documents.append(chunk)
-            metadatas.append({"neo4j_id": item['id']})
+            metadata = {"neo4j_id": item['id']}
+            if document_id:
+                metadata["doc_id"] = document_id
+            metadatas.append(metadata)
             ids.append(f"node_{i}_chunk_{chunk_index}")
                 
     collection.add(
@@ -132,9 +142,16 @@ def build_vector_db(data_path):
     )
     
     print(f"Success! Added {len(documents)} semantic chunks to Vector DB.")
+    print(f"  Collection: {collection_name}")
     print(f"  Config: chunk_size={CHUNK_SIZE}, overlap={CHUNK_OVERLAP}")
     print(f"  Sections processed: {len(data)}")
     print(f"  Avg chunks/section: {len(documents) / max(len(data), 1):.1f}")
+
+    return {
+        "collection_name": collection_name,
+        "chunk_count": len(documents),
+        "section_count": len(data),
+    }
 
 if __name__ == "__main__":
     build_vector_db(json_path)
