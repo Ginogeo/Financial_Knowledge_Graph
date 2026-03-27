@@ -3,6 +3,7 @@ import json
 import os
 import time
 import requests
+from html import unescape
 
 # Import unstructured at module level (slow first import due to emoji library)
 try:
@@ -249,6 +250,55 @@ def extract_with_pdfplumber(pdf_path: str, extract_tables: bool = True) -> list:
     return elements
 
 
+def extract_with_html(html_path: str) -> list:
+    """
+    Extract text blocks from an HTML file.
+
+    Prefers BeautifulSoup when available and falls back to regex-based cleanup.
+    """
+    print("Using HTML extraction...")
+
+    class Text:
+        def __init__(self, text: str):
+            self.text = text
+
+        def __str__(self):
+            return self.text
+
+        def __repr__(self):
+            return f"Text({self.text[:50]}...)"
+
+    with open(html_path, "r", encoding="utf-8", errors="ignore") as f:
+        raw_html = f.read()
+
+    elements = []
+
+    try:
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(raw_html, "html.parser")
+        for tag in soup(["script", "style", "noscript"]):
+            tag.decompose()
+
+        blocks = soup.find_all(["h1", "h2", "h3", "h4", "p", "li", "td", "th", "div"])
+        for block in blocks:
+            text = block.get_text(" ", strip=True)
+            if text and len(text) > 5:
+                elements.append(Text(text))
+    except ImportError:
+        # Basic fallback when BeautifulSoup is unavailable.
+        cleaned = re.sub(r"(?is)<(script|style|noscript).*?>.*?</\\1>", " ", raw_html)
+        cleaned = re.sub(r"(?s)<[^>]+>", "\n", cleaned)
+        cleaned = unescape(cleaned)
+        for line in cleaned.splitlines():
+            text = " ".join(line.split()).strip()
+            if text and len(text) > 5:
+                elements.append(Text(text))
+
+    print(f"Extracted {len(elements)} text elements from HTML")
+    return elements
+
+
 def process_document(
     pdf_path: str, 
     output_path: str, 
@@ -264,16 +314,16 @@ def process_document(
     Args:
         pdf_path: Path to the PDF file
         output_path: Path to save the parsed JSON
-        method: "pdfminer", "pdfplumber", "unstructured", or "mistral_ocr"
+        method: "pdfminer", "pdfplumber", "unstructured", "mistral_ocr", or "html"
         strategy: "fast" or "hi_res" (only for unstructured method)
             Note: hi_res requires Tesseract OCR installed
         use_tables: Extract tables (for pdfplumber and unstructured methods)
         mistral_api_key: API key for Mistral OCR (only for mistral_ocr method)
         mistral_pdf_url: Public HTTPS URL to PDF (required for mistral_ocr method)
     """
-    print(f"Looking for PDF at: {pdf_path}")
+    print(f"Looking for input at: {pdf_path}")
     if not os.path.exists(pdf_path):
-        raise FileNotFoundError(f"PDF not found: {pdf_path}")
+        raise FileNotFoundError(f"Input document not found: {pdf_path}")
 
     print(f"Parsing document using [{method.upper()}] method...")
     
@@ -286,10 +336,12 @@ def process_document(
         elements = extract_with_unstructured(pdf_path, use_tables, strategy)
     elif method == "mistral_ocr":
         elements = extract_with_mistral_ocr(pdf_path, mistral_api_key, mistral_pdf_url)
+    elif method == "html":
+        elements = extract_with_html(pdf_path)
     else:
-        raise ValueError(f"Unknown method: {method}. Use 'pdfminer', 'pdfplumber', 'unstructured', or 'mistral_ocr'")
+        raise ValueError(f"Unknown method: {method}. Use 'pdfminer', 'pdfplumber', 'unstructured', 'mistral_ocr', or 'html'")
     
-    print(f"Extracted {len(elements)} raw elements from PDF.")
+    print(f"Extracted {len(elements)} raw elements from document.")
 
     # ------------------------------------------------------------------ #
     # Regex patterns                                                       #

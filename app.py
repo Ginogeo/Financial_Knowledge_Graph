@@ -125,7 +125,7 @@ with st.sidebar:
     st.divider()
     st.markdown("### 📁 Document Management")
 
-    uploaded_file = st.file_uploader("Upload PDF", type=["pdf"])
+    uploaded_file = st.file_uploader("Upload Document", type=["pdf", "html", "htm"])
     custom_doc_name = st.text_input("Document name (optional)", placeholder="Defaults to file name")
 
     if st.button("Process Uploaded Document", use_container_width=True):
@@ -152,10 +152,12 @@ with st.sidebar:
                     f.write(uploaded_file.getbuffer())
 
                 with st.spinner("Parsing, vectorizing, and building graph..."):
+                    ext = os.path.splitext(filename)[1].lower()
+                    parser_method = "html" if ext in (".html", ".htm") else "pdfplumber"
                     process_document(
                         pdf_path=paths["raw_pdf_path"],
                         output_path=paths["parsed_json_path"],
-                        method="pdfplumber",
+                        method=parser_method,
                         use_tables=True,
                     )
                     vector_stats = build_vector_db(paths["parsed_json_path"], document_id=document_id)
@@ -306,7 +308,7 @@ if search_button and query:
         st.markdown(
             f"""<div class='llm-response rag'>
             {rag_response}
-            </div>""",
+            """,
             unsafe_allow_html=True
         )
         

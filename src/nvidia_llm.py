@@ -6,7 +6,9 @@ Supports comparison between direct LLM queries and RAG-enhanced queries.
 import os
 import sys
 import json
+import re
 from typing import Optional, Tuple
+from html import unescape
 from pypdf import PdfReader
 from openai import OpenAI
 
@@ -42,18 +44,34 @@ def _get_document_dirs(document_id: Optional[str] = None) -> Tuple[str, str]:
     return raw_dir, processed_dir
 
 
-def load_full_document(max_chars: int = 597681, document_id: Optional[str] = None) -> str:
+def _load_html_text(html_path: str) -> str:
+    with open(html_path, "r", encoding="utf-8", errors="ignore") as f:
+        raw_html = f.read()
+
+    try:
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(raw_html, "html.parser")
+        for tag in soup(["script", "style", "noscript"]):
+            tag.decompose()
+        text = soup.get_text("\n", strip=True)
+    except ImportError:
+        cleaned = re.sub(r"(?is)<(script|style|noscript).*?>.*?</\\1>", " ", raw_html)
+        cleaned = re.sub(r"(?s)<[^>]+>", "\n", cleaned)
+        text = unescape(cleaned)
+
+    lines = [" ".join(line.split()).strip() for line in text.splitlines()]
+    lines = [line for line in lines if line]
+    return "\n".join(lines)
+
+
+def load_full_document(max_chars: Optional[int] = None, document_id: Optional[str] = None) -> str:
     """
-    Load the entire raw PDF document as one big text blob.
+    Load the entire raw document as one big text blob.
     This represents the naive approach: dumping everything into the LLM context.
     
-    Full document stats:
-    - 597,681 characters
-    - 111,118 words
-    - ~149,420 tokens (at 4 chars/token)
-    
     Args:
-        max_chars: Maximum characters to include (default: full document)
+        max_chars: Optional maximum characters to include. If None, no truncation.
     
     Returns:
         Full document text concatenated together
@@ -64,25 +82,32 @@ def load_full_document(max_chars: int = 597681, document_id: Optional[str] = Non
             return f"Error loading document: Raw directory not found for document_id={document_id}"
 
         preferred_pdf = os.path.join(raw_dir, "SEC 10-K Filing.pdf")
+        files = sorted(os.listdir(raw_dir))
 
         if os.path.exists(preferred_pdf):
-            pdf_path = preferred_pdf
+            selected_path = preferred_pdf
         else:
-            pdf_files = [f for f in os.listdir(raw_dir) if f.lower().endswith(".pdf")]
-            if not pdf_files:
-                return "Error loading document: No PDF file found in raw directory"
-            pdf_path = os.path.join(raw_dir, pdf_files[0])
+            candidates = [
+                f for f in files if f.lower().endswith((".pdf", ".html", ".htm"))
+            ]
+            if not candidates:
+                return "Error loading document: No supported file (.pdf/.html/.htm) found in raw directory"
+            selected_path = os.path.join(raw_dir, candidates[0])
 
-        reader = PdfReader(pdf_path)
+        ext = os.path.splitext(selected_path)[1].lower()
+        if ext == ".pdf":
+            reader = PdfReader(selected_path)
 
-        # Concatenate all pages
-        full_text = ""
-        for page_number, page in enumerate(reader.pages, start=1):
-            page_text = page.extract_text() or ""
-            full_text += f"\n\n{'='*60}\nPAGE {page_number}\n{'='*60}\n{page_text}"
+            # Concatenate all pages
+            full_text = ""
+            for page_number, page in enumerate(reader.pages, start=1):
+                page_text = page.extract_text() or ""
+                full_text += f"\n\n{'='*60}\nPAGE {page_number}\n{'='*60}\n{page_text}"
+        else:
+            full_text = _load_html_text(selected_path)
         
-        # Truncate if too long (to avoid exceeding model context limits)
-        if len(full_text) > max_chars:
+        # Optional truncation only when max_chars is explicitly provided
+        if max_chars is not None and len(full_text) > max_chars:
             full_text = full_text[:max_chars] + "\n\n[... Document truncated due to length ...]"
         
         return full_text
@@ -106,8 +131,8 @@ def query_llm_full_document(question: str, model: str = DEFAULT_MODEL, temperatu
         The LLM's response based on full document
     """
     try:
-        # Load the entire document
-        full_doc = load_full_document(max_chars=597681, document_id=document_id)
+        # Load the entire document without truncation
+        full_doc = load_full_document(document_id=document_id)
         
         prompt = f"""You are a financial analyst assistant. Answer the question based on the financial document provided below.
 
@@ -284,7 +309,8 @@ def get_available_models():
         "mistralai/mistral-large-2-instruct",
         "mistralai/mixtral-8x7b-instruct-v0.1",
         "moonshotai/kimi-k2.5",
-        "minimaxai/minimax-m2.5"
+        "minimaxai/minimax-m2.5",
+        "qwen/qwen3.5-122b-a10b"
     ]
 
 
